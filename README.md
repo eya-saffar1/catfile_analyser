@@ -18,6 +18,7 @@ fi
 awk -v ticket="$TICKET_NUMBER" '
 function has_ticket_number(line) {
     # Search the ticket number anywhere inside the line.
+    # Example: ticket 12345678 will match XXX12345678 or ABC00012345678ZZZ.
     return index(line, ticket) > 0
 }
 
@@ -46,11 +47,14 @@ END {
         }
     }
 
-    # Find footer: from first TOT to end of file
+    # Find footer: TOT -> TTT
     for (i = 1; i <= NR; i++) {
         if (lines[i] ~ /^[[:space:]]*TOT/) {
             footer_start = i
-            footer_end = NR
+        }
+
+        if (footer_start && lines[i] ~ /^[[:space:]]*TTT/) {
+            footer_end = i
             break
         }
     }
@@ -60,8 +64,8 @@ END {
         exit 2
     }
 
-    if (!footer_start) {
-        print "Error: footer not found. Expected a line starting with TOT." > "/dev/stderr"
+    if (!footer_start || !footer_end) {
+        print "Error: footer not found. Expected lines from TOT to TTT." > "/dev/stderr"
         exit 3
     }
 
@@ -114,7 +118,7 @@ END {
         print lines[i]
     }
 
-    # Print footer from TOT to end of file
+    # Print footer
     for (i = footer_start; i <= footer_end; i++) {
         print lines[i]
     }
