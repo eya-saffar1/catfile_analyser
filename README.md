@@ -47,15 +47,14 @@ END {
         }
     }
 
-    # Find footer: TOT -> TTT
+    # Find footer: from first TOT to last TTT
     for (i = 1; i <= NR; i++) {
-        if (lines[i] ~ /^[[:space:]]*TOT/) {
+        if (!footer_start && lines[i] ~ /^[[:space:]]*TOT/) {
             footer_start = i
         }
 
         if (footer_start && lines[i] ~ /^[[:space:]]*TTT/) {
             footer_end = i
-            break
         }
     }
 
@@ -65,7 +64,7 @@ END {
     }
 
     if (!footer_start || !footer_end) {
-        print "Error: footer not found. Expected lines from TOT to TTT." > "/dev/stderr"
+        print "Error: footer not found. Expected lines from TOT to last TTT." > "/dev/stderr"
         exit 3
     }
 
@@ -118,7 +117,7 @@ END {
         print lines[i]
     }
 
-    # Print footer
+    # Print footer from TOT to the last TTT
     for (i = footer_start; i <= footer_end; i++) {
         print lines[i]
     }
