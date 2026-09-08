@@ -3,23 +3,26 @@
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
-    echo "Usage: $0 <cat_file> <ticket_number>" >&2
+    echo "Usage: $0 <hot_file> <ticket_number>" >&2
     exit 1
 fi
 
-CAT_FILE="$1"
+HOT_FILE="$1"
 TICKET_NUMBER="$2"
 
-if [ ! -f "$CAT_FILE" ]; then
-    echo "Error: file not found: $CAT_FILE" >&2
+if [ ! -f "$HOT_FILE" ]; then
+    echo "Error: file not found: $HOT_FILE" >&2
     exit 1
 fi
 
 awk -v ticket="$TICKET_NUMBER" '
 function has_ticket_number(line) {
     # Search the ticket number anywhere inside the line.
-    # Example: ticket 12345678 will match XXX12345678 or ABC00012345678ZZZ.
     return index(line, ticket) > 0
+}
+
+function starts_with(line, code) {
+    return toupper(line) ~ ("^[[:space:]]*" code)
 }
 
 {
@@ -29,47 +32,75 @@ function has_ticket_number(line) {
 END {
     header_start = 0
     header_end = 0
+
+    ticket_line = 0
+    bkt_start = 0
+    bkp_end = 0
+
+    bft_line = 0
+    last_bkp_before_bft = 0
     footer_start = 0
     footer_end = 0
-    ticket_line = 0
-    tkt_start = 0
-    tkp_end = 0
 
-    # Find header: TTH -> TOH
+    # Find header: BFH -> BOH
     for (i = 1; i <= NR; i++) {
-        if (lines[i] ~ /^[[:space:]]*TTH/) {
+        if (starts_with(lines[i], "BFH")) {
             header_start = i
         }
 
-        if (header_start && lines[i] ~ /^[[:space:]]*TOH/) {
+        if (header_start && starts_with(lines[i], "BOH")) {
             header_end = i
             break
         }
     }
 
-    # Find footer: TOT -> TTT
-    for (i = 1; i <= NR; i++) {
-        if (lines[i] ~ /^[[:space:]]*TOT/) {
-            footer_start = i
-        }
+    if (!header_start || !header_end) {
+        print "Error: header not found. Expected lines from BFH to BOH." > "/dev/stderr"
+        exit 2
+    }
 
-        if (footer_start && lines[i] ~ /^[[:space:]]*TTT/) {
+    # Find BFT: end of footer
+    for (i = 1; i <= NR; i++) {
+        if (starts_with(lines[i], "BFT")) {
+            bft_line = i
             footer_end = i
             break
         }
     }
 
-    if (!header_start || !header_end) {
-        print "Error: header not found. Expected lines from TTH to TOH." > "/dev/stderr"
-        exit 2
-    }
-
-    if (!footer_start || !footer_end) {
-        print "Error: footer not found. Expected lines from TOT to TTT." > "/dev/stderr"
+    if (!bft_line) {
+        print "Error: BFT not found." > "/dev/stderr"
         exit 3
     }
 
-    # Search for the ticket number after the header and before the footer
+    # From BFT, go up to find the previous BKP
+    for (i = bft_line - 1; i >= 1; i--) {
+        if (starts_with(lines[i], "BKP")) {
+            last_bkp_before_bft = i
+            break
+        }
+    }
+
+    if (!last_bkp_before_bft) {
+        print "Error: no BKP found before BFT." > "/dev/stderr"
+        exit 4
+    }
+
+    # From that BKP, go down to find the first BOT
+    # This allows multiple BOT blocks between BKP and BFT.
+    for (i = last_bkp_before_bft + 1; i <= bft_line; i++) {
+        if (starts_with(lines[i], "BOT")) {
+            footer_start = i
+            break
+        }
+    }
+
+    if (!footer_start) {
+        print "Error: no BOT found between last BKP and BFT." > "/dev/stderr"
+        exit 5
+    }
+
+    # Search for the requested ticket number after header and before footer
     for (i = header_end + 1; i < footer_start; i++) {
         if (has_ticket_number(lines[i])) {
             ticket_line = i
@@ -79,33 +110,33 @@ END {
 
     if (!ticket_line) {
         print "Error: ticket number " ticket " not found." > "/dev/stderr"
-        exit 4
-    }
-
-    # Go up from the found ticket number until the previous TKT
-    for (i = ticket_line; i >= 1; i--) {
-        if (lines[i] ~ /^[[:space:]]*TKT/) {
-            tkt_start = i
-            break
-        }
-    }
-
-    if (!tkt_start) {
-        print "Error: found ticket number, but no TKT line before it." > "/dev/stderr"
-        exit 5
-    }
-
-    # Go down from TKT until TKP
-    for (i = tkt_start; i <= NR; i++) {
-        if (lines[i] ~ /^[[:space:]]*TKP/) {
-            tkp_end = i
-            break
-        }
-    }
-
-    if (!tkp_end) {
-        print "Error: found TKT, but no TKP line after it." > "/dev/stderr"
         exit 6
+    }
+
+    # Go up from the found ticket number until the previous BKT
+    for (i = ticket_line; i >= header_end + 1; i--) {
+        if (starts_with(lines[i], "BKT")) {
+            bkt_start = i
+            break
+        }
+    }
+
+    if (!bkt_start) {
+        print "Error: found ticket number, but no BKT line before it." > "/dev/stderr"
+        exit 7
+    }
+
+    # Go down from BKT until BKP
+    for (i = bkt_start; i < footer_start; i++) {
+        if (starts_with(lines[i], "BKP")) {
+            bkp_end = i
+            break
+        }
+    }
+
+    if (!bkp_end) {
+        print "Error: found BKT, but no BKP line after it." > "/dev/stderr"
+        exit 8
     }
 
     # Print header
@@ -114,13 +145,13 @@ END {
     }
 
     # Print only the selected ticket
-    for (i = tkt_start; i <= tkp_end; i++) {
+    for (i = bkt_start; i <= bkp_end; i++) {
         print lines[i]
     }
 
-    # Print footer
+    # Print footer: from first BOT after last BKP before BFT, until BFT
     for (i = footer_start; i <= footer_end; i++) {
         print lines[i]
     }
 }
-' "$CAT_FILE"
+' "$HOT_FILE"
